@@ -49,7 +49,6 @@ MIN_KB = 100
 IMG_EXT = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".heic", ".heif"}
 PDF_EXT = {".pdf"}
 ALLOW_ZIP = True  # izinkan ZIP agar bisa memuat banyak file di dalamnya
-# (video pun jika berada di dalam ZIP akan diabaikan saat ekstraksi)
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".3gp", ".wmv", ".flv", ".mpg", ".mpeg"}
 
 # ===== Helpers (quality tuned) =====
@@ -196,16 +195,19 @@ def guess_base_name_from_zip(zipname: str) -> str:
     return base or "output"
 
 def process_one_file_entry(relpath: Path, raw_bytes: bytes, input_root_label: str):
-    processed = []
+    processed: List[Tuple[str, int, float, int, bool]] = []
     outputs: Dict[str, bytes] = {}
     skipped: List[Tuple[str, str]] = []
+
     ext = relpath.suffix.lower()
     try:
         if ext in PDF_EXT:
             pages = pdf_bytes_to_images(raw_bytes, dpi=PDF_DPI)
             for idx, pil_img in enumerate(pages, start=1):
                 try:
-                    data, scale, q, size_b = compress_into_range(pil_img, MIN_KB, TARGET_KB, MIN_SIDE_PX, SCALE_MIN, UPSCALE_MAX, SHARPEN_ON_RESIZE, SHARPEN_AMOUNT)
+                    data, scale, q, size_b = compress_into_range(
+                        pil_img, MIN_KB, TARGET_KB, MIN_SIDE_PX, SCALE_MIN, UPSCALE_MAX, SHARPEN_ON_RESIZE, SHARPEN_AMOUNT
+                    )
                     out_rel = relpath.with_suffix("").as_posix() + f"_p{idx}.jpg"
                     outputs[out_rel] = data
                     processed.append((out_rel, size_b, scale, q, MIN_KB*1024 <= size_b <= TARGET_KB*1024))
@@ -215,19 +217,23 @@ def process_one_file_entry(relpath: Path, raw_bytes: bytes, input_root_label: st
             im = load_image_from_bytes(relpath.name, raw_bytes)
             if ext == ".gif":
                 im = gif_first_frame(im)
-            data, scale, q, size_b = compress_into_range(im, MIN_KB, TARGET_KB, MIN_SIDE_PX, SCALE_MIN, UPSCALE_MAX, SHARPEN_ON_RESIZE, SHARPEN_AMOUNT)
+            data, scale, q, size_b = compress_into_range(
+                im, MIN_KB, TARGET_KB, MIN_SIDE_PX, SCALE_MIN, UPSCALE_MAX, SHARPEN_ON_RESIZE, SHARPEN_AMOUNT
+            )
             out_rel = relpath.with_suffix(".jpg").as_posix()
             outputs[out_rel] = data
             processed.append((out_rel, size_b, scale, q, MIN_KB*1024 <= size_b <= TARGET_KB*1024))
         elif ext in {".heic", ".heif"} and not HEIF_OK:
             skipped.append((str(relpath), "Butuh pillow-heif (tidak tersedia)"))
+        # else: ignore unknown
     except Exception as e:
         skipped.append((str(relpath), str(e)))
+
     return input_root_label, processed, skipped, outputs
 
 # ===== UI Upload & Run =====
 st.subheader("1) Upload ZIP atau File Lepas")
-# ✅ Batasi ekstensi yang bisa dipilih di uploader supaya video tidak muncul sama sekali
+# ✅ Batasi ekstensi yang boleh di-uploader agar video tidak muncul di daftar
 allowed_exts_for_uploader = sorted({e.lstrip('.') for e in IMG_EXT.union(PDF_EXT)} | ({"zip"} if ALLOW_ZIP else set()))
 uploaded_files = st.file_uploader(
     "Upload beberapa ZIP (berisi folder/gambar/PDF) dan/atau file lepas (gambar/PDF). Video ditolak otomatis (tidak dimuat).",
@@ -289,20 +295,20 @@ if run:
     zip_write_lock = threading.Lock()
 
     with zipfile.ZipFile(master_buf, "w", compression=ZIP_COMP_ALGO) as master:
-        top_folders = {}
+        top_folders: Dict[str, str] = {}
         for job in jobs:
-            top = f\"{job['label']}_compressed\"
+            top = f"{job['label']}_compressed"
             top_folders[job['label']] = top
-            master.writestr(f\"{top}/\", \"\")
+            master.writestr(f"{top}/", "")
 
         def add_to_master_zip_threadsafe(top_folder: str, rel_path: str, data: bytes):
             with zip_write_lock:
-                master.writestr(f\"{top_folder}/{rel_path}\", data)
+                master.writestr(f"{top_folder}/{rel_path}", data)
 
         def worker(label: str, relp: Path, raw: bytes):
             return process_one_file_entry(relp, raw, label)
 
-        all_tasks = [(job[\"label\"], relp, data) for job in jobs for (relp, data) in job[\"items\"]]
+        all_tasks = [(job["label"], relp, data) for job in jobs for (relp, data) in job["items"]]
         total, done = len(all_tasks), 0
         progress = st.progress(0.0)
 
