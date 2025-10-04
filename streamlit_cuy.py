@@ -44,7 +44,7 @@ ZIP_COMP_ALGO = zipfile.ZIP_STORED if SPEED_PRESET == "fast" else zipfile.ZIP_DE
 
 # ✅ Target size fixed by system
 TARGET_KB = 170
-MIN_KB = 100
+MIN_KB = 168
 
 IMG_EXT = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".heic", ".heif"}
 PDF_EXT = {".pdf"}
