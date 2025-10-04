@@ -18,9 +18,9 @@ except Exception:
     HEIF_OK = False
 
 # ===== PAGE =====
-st.set_page_config(page_title="Multi-ZIP → JPG & Kompres 100–170 KB", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Multi-ZIP → JPG & Kompres 168–174 KB", page_icon="📦", layout="wide")
 st.title("📦 Multi-ZIP / Files → JPG & Kompres 100–170 KB (auto)")
-st.caption("Konversi gambar (termasuk JFIF/HEIC) & PDF ke JPG. Target otomatis: min 100 KB, max 170 KB. Video tidak diterima (tidak muncul di uploader & tidak diproses).")
+st.caption("Konversi gambar (termasuk JFIF/HEIC) & PDF ke JPG. Target otomatis: min 168 KB, max 174 KB. Video tidak diterima (tidak muncul di uploader & tidak diproses).")
 
 # ===== Sidebar Settings =====
 with st.sidebar:
@@ -43,7 +43,7 @@ THREADS = min(4, max(2, (os.cpu_count() or 2)))  # <= Batasin agar stabil
 ZIP_COMP_ALGO = zipfile.ZIP_STORED if SPEED_PRESET == "fast" else zipfile.ZIP_DEFLATED
 
 # ✅ Target size fixed by system
-TARGET_KB = 170
+TARGET_KB = 174
 MIN_KB = 168
 
 IMG_EXT = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".heic", ".heif"}
