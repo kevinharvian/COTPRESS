@@ -19,7 +19,7 @@ except Exception:
 
 # ===== PAGE =====
 st.set_page_config(page_title="Multi-ZIP → JPG & Kompres 168–174 KB", page_icon="📦", layout="wide")
-st.title("📦 Multi-ZIP / Files → JPG & Kompres 100–170 KB (auto)")
+st.title("📦 Multi-ZIP / Files → JPG & Kompres 168–174 KB (auto)")
 st.caption("Konversi gambar (termasuk JFIF/HEIC) & PDF ke JPG. Target otomatis: min 168 KB, max 174 KB. Video tidak diterima (tidak muncul di uploader & tidak diproses).")
 
 # ===== Sidebar Settings =====
