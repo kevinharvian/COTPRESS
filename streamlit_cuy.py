@@ -5,7 +5,7 @@ from typing import List, Tuple, Dict
 from collections import defaultdict
 
 import streamlit as st
-from PIL import Image, ImageOps, ImageFilter, ImageEnhance
+from PIL import Image, ImageOps, ImageFilter, ImageEnhance, ImageChops
 import fitz  # PyMuPDF
 
 # ===== HEIC/HEIF =====
@@ -30,16 +30,16 @@ with st.sidebar:
     MIN_SIDE_PX = st.number_input("Sisi terpendek minimum (px)", 64, 2048, 256, 32)
     SCALE_MIN = st.slider("Skala minimum saat downscale", 0.10, 0.75, 0.35, 0.05)
 
-    # 🔎 Optimasi dokumen/tulisan
+    # 🔎 Optimasi dokumen/tulisan (lebih natural)
     DOC_OPTIMIZE = st.checkbox("Optimasi dokumen/tulisan (auto)", True)
-    DOC_STRENGTH = st.slider("Kekuatan optimasi dokumen", 0.0, 2.0, 1.0, 0.05)
+    DOC_STRENGTH = st.slider("Kekuatan optimasi dokumen", 0.0, 2.0, 0.8, 0.05)
 
     # ✅ Mode ini memprioritaskan kualitas visual untuk menghindari titik-titik/pecah
     QUALITY_SAFE_MODE = st.checkbox("Mode anti-artifact (disarankan)", True)
 
     UPSCALE_MAX = 1.0 if QUALITY_SAFE_MODE else st.slider("Batas upscale maksimum", 1.0, 3.0, 2.0, 0.1)
     SHARPEN_ON_RESIZE = st.checkbox("Sharpen ringan setelah resize", True)
-    SHARPEN_AMOUNT = st.slider("Sharpen amount (resize)", 0.0, 2.0, 0.7 if QUALITY_SAFE_MODE else 1.0, 0.1)
+    SHARPEN_AMOUNT = st.slider("Sharpen amount (resize)", 0.0, 2.0, 0.5 if QUALITY_SAFE_MODE else 0.8, 0.1)
 
     # 🎛️ Tuning Manual (opsional)
     MANUAL_TUNE = st.checkbox("Tuning manual (brightness/contrast/saturation/clarity)", False)
@@ -51,13 +51,13 @@ with st.sidebar:
         HIGHLIGHTS_COMP = st.slider("Jinakkan highlights", 0.0, 0.6, 0.15, 0.01)
         SHADOWS_LIFT = st.slider("Angkat shadows", 0.0, 0.6, 0.15, 0.01)
     else:
-        # Default auto yang aman untuk dokumen/tulisan
-        BRIGHT_DELTA = int(8 * DOC_STRENGTH)     # +8% per strength
-        CONTRAST_DELTA = int(15 * DOC_STRENGTH)  # +15% per strength
-        SAT_DELTA = int(6 * DOC_STRENGTH)        # +6% per strength
-        CLARITY_DELTA = int(10 * DOC_STRENGTH)   # +10% per strength
-        HIGHLIGHTS_COMP = 0.12 * DOC_STRENGTH
-        SHADOWS_LIFT = 0.12 * DOC_STRENGTH
+        # Default auto yang aman/natural untuk dokumen/tulisan
+        BRIGHT_DELTA = int(8 * DOC_STRENGTH)     # ~+8% per strength
+        CONTRAST_DELTA = int(12 * DOC_STRENGTH)  # ~+12% per strength
+        SAT_DELTA = int(6 * DOC_STRENGTH)        # ~+6% per strength (dokumen berwarna)
+        CLARITY_DELTA = int(8 * DOC_STRENGTH)    # ~+8% per strength
+        HIGHLIGHTS_COMP = 0.10 * DOC_STRENGTH
+        SHADOWS_LIFT = 0.10 * DOC_STRENGTH
 
     PDF_DPI = 180 if SPEED_PRESET == "fast" else 220  # sedikit lebih tinggi untuk hasil PDF lebih halus
     MASTER_ZIP_NAME = st.text_input("Nama master ZIP", "compressed.zip")
@@ -65,8 +65,7 @@ with st.sidebar:
 
 # ===== Tunables =====
 MAX_QUALITY = 95
-# Di safe mode, jaga kualitas agar tidak turun terlalu rendah (menghindari blok/pixel pecah)
-MIN_QUALITY = 45 if QUALITY_SAFE_MODE else 15
+MIN_QUALITY = 45 if QUALITY_SAFE_MODE else 15  # jaga kualitas supaya tidak pecah
 BG_FOR_ALPHA = (255, 255, 255)
 THREADS = min(4, max(2, (os.cpu_count() or 2)))  # <= Batasin agar stabil
 ZIP_COMP_ALGO = zipfile.ZIP_STORED if SPEED_PRESET == "fast" else zipfile.ZIP_DEFLATED
@@ -77,7 +76,6 @@ MIN_KB = 168
 IMG_EXT = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".tif", ".tiff", ".bmp", ".gif", ".heic", ".heif"}
 PDF_EXT = {".pdf"}
 ALLOW_ZIP = True
-VIDEO_EXT = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".3gp", ".wmv", ".flv", ".mpg", ".mpeg"}
 
 # ===== Helper flags for JPEG encoder quality =====
 # Subsampling 4:4:4 mengurangi color bleeding/"titik" pada tepi kontras tinggi.
@@ -88,21 +86,14 @@ JPEG_PROGRESSIVE = True
 # ==========================
 # Helpers (quality tuned)
 # ==========================
-
 def clamp01(x: float) -> float:
     return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
 
 def maybe_sharpen(img: Image.Image, do_it=True, amount=1.0) -> Image.Image:
     if not do_it or amount <= 0:
         return img
-    # Unsharp lebih kalem saat tahap resize (biar nggak oversharpen)
+    # Unsharp kalem saat tahap resize
     return img.filter(ImageFilter.UnsharpMask(radius=1.0, percent=int(130 * amount), threshold=2))
-
-def doc_unsharp(img: Image.Image, amount=1.0) -> Image.Image:
-    """Sharpen khusus teks/dokumen: lebih kuat tapi threshold rendah supaya garis huruf tegas."""
-    if amount <= 0:
-        return img
-    return img.filter(ImageFilter.UnsharpMask(radius=1.3, percent=int(180 * amount), threshold=1))
 
 def pre_smooth_if_downscaling(img: Image.Image, scale: float) -> Image.Image:
     """Sedikit Gaussian blur sebelum downscale untuk anti-aliasing & anti-ringing."""
@@ -124,7 +115,6 @@ def to_rgb_flat(img: Image.Image, bg=BG_FOR_ALPHA) -> Image.Image:
 
 def save_jpg_bytes(img: Image.Image, quality: int) -> bytes:
     buf = io.BytesIO()
-    # Gunakan 4:4:4 + progressive + optimize untuk artefak lebih halus.
     img.save(
         buf,
         format="JPEG",
@@ -139,7 +129,6 @@ def try_quality_bs(img: Image.Image, target_kb: int, q_min=MIN_QUALITY, q_max=MA
     lo, hi = q_min, q_max
     best_bytes = None
     best_q = None
-    # Binary search kualitas, tapi tidak turun di bawah MIN_QUALITY saat safe mode
     while lo <= hi:
         mid = (lo + hi) // 2
         data = save_jpg_bytes(img, mid)
@@ -176,46 +165,52 @@ def gif_first_frame(im: Image.Image) -> Image.Image:
     return im.convert("RGBA") if im.mode == "P" else im
 
 # ==========================
-# 🔎 Dokumen/Tulisan Enhancer
+# 🔎 Dokumen/Tulisan Enhancer (natural)
 # ==========================
 def _tone_curve_lut(shadows: float, highlights: float) -> list:
-    """
-    LUT sederhana untuk L channel:
-      - shadows: angkat area gelap
-      - highlights: jinakkan area terang
-    Range input 0..1. Formula halus, tidak bikin posterize.
-    """
-    shadows = clamp01(shadows)
-    highlights = clamp01(highlights)
+    """LUT lembut untuk L channel: angkat shadow & jinakkan highlight (0..1)."""
+    shadows = clamp01(shadows); highlights = clamp01(highlights)
     lut = []
     for i in range(256):
         x = i / 255.0
-        # Angkat shadow (lebih kuat di area gelap)
-        y = x + shadows * (1.0 - x) * (1.0 - x)
-        # Jinakkan highlight (lebih kuat di area terang)
-        y = y - highlights * (x * x)
-        y = clamp01(y)
-        lut.append(int(round(y * 255)))
+        y = x + shadows * (1.0 - x) * (1.0 - x)  # angkat shadow
+        y = y - highlights * (x * x)             # jinakkan highlight
+        lut.append(int(round(clamp01(y) * 255)))
     return lut
 
 def _apply_lab_local_contrast(img: Image.Image, clarity_factor: float, auto_contrast_cut=1) -> Image.Image:
-    """
-    Naikkan local/global contrast via kanal L pada ruang LAB.
-    - equalize + autocontrast pada L, diblend supaya tidak berlebihan.
-    - clarity_factor: 1.0 = +10% kira-kira
-    """
+    """Local/global contrast via kanal L (LAB), versi natural."""
     if img.mode != "RGB":
         img = img.convert("RGB")
     lab = img.convert("LAB")
     L, A, B = lab.split()
     L_eq = ImageOps.equalize(L)
-    # Blend equalize 40% * clarity_factor
-    alpha = clamp01(0.4 * (0.5 + 0.5 * clarity_factor))
+    # Lebih kalem: alpha base 0.25 (dibatasi oleh clarity_factor)
+    alpha = clamp01(0.25 * (0.5 + 0.5 * abs(clarity_factor)))
     L_mix = Image.blend(L, L_eq, alpha=alpha)
-    # Autocontrast ringan (buang outlier 1–2%)
     L_ac = ImageOps.autocontrast(L_mix, cutoff=auto_contrast_cut)
     out = Image.merge("LAB", (L_ac, A, B)).convert("RGB")
     return out
+
+def _edge_mask(img: Image.Image, edge_th: int = 20, blur: float = 0.8) -> Image.Image:
+    """Mask tepi (huruf/garis) untuk batasi sharpening agar tidak berlebihan."""
+    g = img.convert("L").filter(ImageFilter.FIND_EDGES)
+    g = ImageOps.autocontrast(g)
+    g = g.point(lambda p: 255 if p >= edge_th else 0)
+    if blur > 0:
+        g = g.filter(ImageFilter.GaussianBlur(radius=blur))
+    return g
+
+def doc_unsharp_smart(img: Image.Image, amount: float = 1.0,
+                      radius: float = 0.9, percent_base: int = 90, threshold: int = 4) -> Image.Image:
+    """
+    Smart sharpen untuk dokumen: unsharp halus + blend pakai edge mask
+    supaya teks tegas tanpa halo/artefak.
+    """
+    percent = int(percent_base * (1.0 + 0.6 * max(0.0, min(2.0, amount - 0.5))))
+    shp = img.filter(ImageFilter.UnsharpMask(radius=radius, percent=percent, threshold=threshold))
+    m = _edge_mask(img, edge_th=20, blur=0.8)
+    return Image.composite(shp, img, m)
 
 def enhance_for_text(
     img: Image.Image,
@@ -229,38 +224,38 @@ def enhance_for_text(
     shadows_lift: float,
 ) -> Image.Image:
     """
-    Pipeline aman untuk dokumen/tulisan yang:
-      1) Perbaiki kontras lokal di L channel (LAB)
-      2) Tone curve (angkat shadow & jinakkan highlight) di L
-      3) Brightness/Contrast/Saturation global ringan
-      4) Unsharp mask khusus teks
+    Pipeline dokumen 'natural':
+      1) Local contrast di kanal L (LAB) (ringan)
+      2) Tone curve (angkat shadow & jinakkan highlight) (ringan)
+      3) Global tune kecil (brightness/contrast/sat)
+      4) Smart sharpen edge-aware (kalem)
     """
     if not enabled:
         return to_rgb_flat(img)
 
     base = to_rgb_flat(img)
 
-    # 1) Local/global contrast via L channel
-    clarity_factor = max(-0.4, min(0.4, clarity_delta / 100.0))  # ±40% batas aman
-    out = _apply_lab_local_contrast(base, clarity_factor=abs(clarity_factor), auto_contrast_cut=1 if QUALITY_SAFE_MODE else 0)
+    # 1) Local contrast (lembut)
+    clarity_factor = max(-0.3, min(0.3, clarity_delta / 100.0))
+    out = _apply_lab_local_contrast(base, clarity_factor=clarity_factor, auto_contrast_cut=1 if QUALITY_SAFE_MODE else 0)
 
-    # 2) Tone curve via L channel
+    # 2) Tone curve via L (sedikit dikurangi)
     lab = out.convert("LAB")
     L, A, B = lab.split()
-    lut = _tone_curve_lut(shadows=shadows_lift, highlights=highlights_comp)
-    L2 = L.point(lut * 1)  # apply LUT
+    lut = _tone_curve_lut(shadows=shadows_lift * 0.8, highlights=highlights_comp * 0.8)
+    L2 = L.point(lut * 1)
     out = Image.merge("LAB", (L2, A, B)).convert("RGB")
 
-    # 3) Global tune
+    # 3) Global tune (kalem)
     if bright_delta != 0:
-        out = ImageEnhance.Brightness(out).enhance(1.0 + bright_delta / 100.0)
+        out = ImageEnhance.Brightness(out).enhance(1.0 + (bright_delta / 100.0) * 0.8)
     if contrast_delta != 0:
-        out = ImageEnhance.Contrast(out).enhance(1.0 + contrast_delta / 100.0)
+        out = ImageEnhance.Contrast(out).enhance(1.0 + (contrast_delta / 100.0) * 0.75)
     if sat_delta != 0:
-        out = ImageEnhance.Color(out).enhance(1.0 + sat_delta / 100.0)
+        out = ImageEnhance.Color(out).enhance(1.0 + (sat_delta / 100.0) * 0.6)
 
-    # 4) Unsharp khusus teks/dokumen
-    out = doc_unsharp(out, amount=0.6 + 0.7 * strength)  # 0.6–2.0
+    # 4) Smart sharpen edge-aware (kalem)
+    out = doc_unsharp_smart(out, amount=0.5 + 0.45 * max(0.0, min(2.0, strength)), radius=0.9, percent_base=90, threshold=4)
 
     return out
 
@@ -282,10 +277,9 @@ def compress_into_range(
     # 1) Coba tanpa resize dulu di kualitas optimal
     data, q = try_quality_bs(base, max_kb)
     if data is not None and (len(data) >= min_kb * 1024 or QUALITY_SAFE_MODE):
-        # Jika safe mode dan hasil < min_kb, TETAPKAN hasil ini (jangan paksa upscale)
         return data, 1.0, q, len(data)
 
-    # 2) Kalau perlu resize untuk capai max_kb, prioritaskan resize dibanding turunkan kualitas terlalu jauh
+    # 2) Kalau perlu resize, prioritaskan resize dibanding nurunin kualitas terlalu jauh
     lo, hi = scale_min, 1.0
     best_pack = None
     max_steps = 8 if SPEED_PRESET == "fast" else 12
@@ -312,14 +306,13 @@ def compress_into_range(
 
     data, scale_used, q_used, size_b = result
 
-    # 3) (Opsional) Jika masih di bawah min_kb, JANGAN paksa upscale saat safe mode
+    # 3) Jika masih < MIN_KB, JANGAN paksa upscale saat safe mode
     if size_b < min_kb * 1024 and not QUALITY_SAFE_MODE:
         img_now = resize_to_scale(base, scale_used, do_sharpen, sharpen_amount)
         img_now = ensure_min_side(img_now, min_side_px, do_sharpen, sharpen_amount)
         d, q2 = try_quality_bs(img_now, max_kb, max(q_used, MIN_QUALITY), MAX_QUALITY)
         if d is not None and len(d) > size_b:
             data, q_used, size_b = d, q2, len(d)
-        # Loop upscale terbatas (non-safe mode saja)
         cur_scale = scale_used
         iters = 0
         max_iters = 6 if SPEED_PRESET == "fast" else 12
@@ -344,7 +337,6 @@ def pdf_bytes_to_images(pdf_bytes: bytes, dpi: int) -> List[Image.Image]:
         for page in doc:
             rect = page.rect
             long_inch = max(rect.width, rect.height) / 72.0
-            # Naikkan target panjang untuk meningkatkan ketajaman
             target_long_px = 2400 if QUALITY_SAFE_MODE else 2000
             dpi_eff = int(min(max(dpi, 72), max(72, target_long_px / max(long_inch, 1e-6))))
             mat = fitz.Matrix(dpi_eff / 72.0, dpi_eff / 72.0)
@@ -378,7 +370,6 @@ def process_one_file_entry(relpath: Path, raw_bytes: bytes, input_root_label: st
             pages = pdf_bytes_to_images(raw_bytes, dpi=PDF_DPI)
             for idx, pil_img in enumerate(pages, start=1):
                 try:
-                    # 🔎 Enhance dokumen/tulisan sebelum kompres
                     if DOC_OPTIMIZE:
                         pil_img = enhance_for_text(
                             pil_img, True, DOC_STRENGTH,
@@ -404,7 +395,6 @@ def process_one_file_entry(relpath: Path, raw_bytes: bytes, input_root_label: st
             im = load_image_from_bytes(relpath.name, raw_bytes)
             if ext == ".gif":
                 im = gif_first_frame(im)
-            # 🔎 Enhance dokumen/tulisan sebelum kompres
             if DOC_OPTIMIZE:
                 im = enhance_for_text(
                     im, True, DOC_STRENGTH,
@@ -436,7 +426,6 @@ def process_one_file_entry(relpath: Path, raw_bytes: bytes, input_root_label: st
 # UI Upload & Run
 # ==========================
 st.subheader("1) Upload ZIP atau File Lepas")
-# ✅ Batasi ekstensi yang boleh di-uploader agar video tidak muncul di daftar
 allowed_exts_for_uploader = sorted({e.lstrip('.') for e in IMG_EXT.union(PDF_EXT)} | ({"zip"} if ALLOW_ZIP else set()))
 
 uploaded_files = st.file_uploader(
@@ -554,7 +543,6 @@ if run:
                 if shown >= MAX_ROWS_PER_JOB:
                     break
                 kb = size_b / 1024
-                # Di safe mode, file yang < MIN_KB akan ditandai tetapi tidak di-upscale paksa
                 flag = "✅" if in_range else ("ℹ️" if (QUALITY_SAFE_MODE and kb < MIN_KB) else ("🔼" if kb < MIN_KB else "⚠️"))
                 st.write(f"{flag} {name} → **{kb:.1f} KB** | scale≈{scale:.3f} | quality={q}")
                 ok += 1 if in_range else 0
